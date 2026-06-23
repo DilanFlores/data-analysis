@@ -1,8 +1,7 @@
 """Cadenas de Markov: dinámica de la composición empresarial por tamaño.
 
-Estima una matriz de transición a partir de cómo cambia año a año el peso
-relativo de cada tamaño, calcula la distribución estacionaria y proyecta la
-composición futura.
+Estima la transición de la composición a partir del cambio promedio anual de
+las proporciones de cada tamaño y proyecta la distribución del año siguiente.
 """
 
 from __future__ import annotations
@@ -14,78 +13,67 @@ from plotly.subplots import make_subplots
 
 from estadisticas.analisis._utiles import TAMANIOS, proporciones_anuales
 
-HORIZONTES = [5, 10, 20]  # años a proyectar
 
-
-def _matriz_transicion(props: np.ndarray) -> np.ndarray:
-    """Estima la matriz estocástica P tal que p_{t+1} ≈ p_t · P.
-
-    Resuelve por mínimos cuadrados y proyecta a una matriz válida (filas no
-    negativas que suman 1).
-    """
-    origen, destino = props[:-1], props[1:]
-    P, *_ = np.linalg.lstsq(origen, destino, rcond=None)
-    P = np.clip(P, 0, None)
-    sumas = P.sum(axis=1, keepdims=True)
-    # Filas sin masa se reemplazan por permanencia (identidad).
-    P = np.where(sumas > 0, P / np.where(sumas == 0, 1, sumas), np.eye(len(P)))
-    return P
-
-
-def _estacionaria(P: np.ndarray) -> np.ndarray:
-    """Distribución estacionaria π (eigenvector izquierdo con autovalor 1)."""
-    valores, vectores = np.linalg.eig(P.T)
-    idx = int(np.argmin(np.abs(valores - 1.0)))
-    pi = np.real(vectores[:, idx])
-    return pi / pi.sum()
+def _proyeccion_siguiente(props: np.ndarray) -> np.ndarray:
+    """Proyecta un año aplicando el cambio promedio anual a la última distribución."""
+    tendencia = np.diff(props, axis=0).mean(axis=0)
+    siguiente = np.maximum(props[-1] + tendencia, 0)
+    return siguiente / siguiente.sum()
 
 
 def proyectar_markov(df: pd.DataFrame, metrica: str = "Cantidad UJ") -> go.Figure:
-    """Construye la cadena de Markov sobre la composición de `metrica`.
+    """Modela la composición por tamaño (`metrica`) y proyecta el año siguiente.
 
-    Devuelve una figura con la matriz de transición (mapa de calor) y la
-    proyección de la composición a 5, 10 y 20 años (barras apiladas).
+    Devuelve una figura con la evolución histórica de las proporciones y una
+    tabla comparativa entre los años de referencia y la proyección.
     """
     tabla = proporciones_anuales(df, metrica)
+    anios = tabla.index.tolist()
     props = tabla.to_numpy(dtype=float)
-    P = _matriz_transicion(props)
-    pi = _estacionaria(P)
+    proyeccion = _proyeccion_siguiente(props)
 
-    actual = props[-1]
-    proyecciones = {"Actual": actual}
-    for h in HORIZONTES:
-        proyecciones[f"+{h} años"] = actual @ np.linalg.matrix_power(P, h)
-    proyecciones["Estacionaria"] = pi
+    ini, fin = anios[0], anios[-1]
+    anio_proy = fin + 1
+    # Año de mayor concentración micro (referencia de la composición extrema).
+    anio_pico = int(tabla["Micro"].idxmax())
 
     fig = make_subplots(
-        rows=1, cols=2, column_widths=[0.45, 0.55],
-        specs=[[{"type": "heatmap"}, {"type": "xy"}]],
-        subplot_titles=("Matriz de transición (origen → destino)",
-                        "Proyección de la composición empresarial"),
+        rows=1, cols=2, column_widths=[0.58, 0.42],
+        specs=[[{"type": "xy"}, {"type": "table"}]],
+        subplot_titles=("Evolución de la composición por tamaño",
+                        "Proporciones de referencia y proyección"),
     )
 
-    fig.add_trace(
-        go.Heatmap(
-            z=P, x=TAMANIOS, y=TAMANIOS, colorscale="Blues", zmin=0, zmax=1,
-            text=[[f"{v:.2f}" for v in fila] for fila in P],
-            texttemplate="%{text}", showscale=False),
-        row=1, col=1,
-    )
-    fig.update_yaxes(autorange="reversed", row=1, col=1)
-
-    escenarios = list(proyecciones.keys())
-    for j, tam in enumerate(TAMANIOS):
+    for tam in TAMANIOS:
         fig.add_trace(
-            go.Bar(name=tam, x=escenarios,
-                   y=[proyecciones[e][j] for e in escenarios],
-                   text=[f"{proyecciones[e][j]:.0%}" for e in escenarios],
-                   textposition="inside"),
-            row=1, col=2,
+            go.Scatter(x=anios, y=tabla[tam] * 100, mode="lines+markers",
+                       name=tam),
+            row=1, col=1,
         )
 
-    fig.update_yaxes(tickformat=".0%", title_text="Participación", row=1, col=2)
+    columnas = {
+        f"{ini}": tabla.loc[ini].values,
+        f"{anio_pico} (máx Micro)": tabla.loc[anio_pico].values,
+        f"{fin}": tabla.loc[fin].values,
+        f"Proy. {anio_proy}": proyeccion,
+    }
+    fig.add_trace(
+        go.Table(
+            header=dict(values=["Tamaño"] + list(columnas),
+                        fill_color="#2c3e50", font=dict(color="white"),
+                        align="left"),
+            cells=dict(
+                values=[TAMANIOS] +
+                       [[f"{v * 100:.2f}%" for v in col] for col in columnas.values()],
+                align="left"),
+        ),
+        row=1, col=2,
+    )
+
+    fig.update_yaxes(title_text="Proporción (%)", row=1, col=1)
     fig.update_layout(
-        title=f"Dinámica de composición por tamaño ({metrica})",
-        barmode="stack", legend_title_text="Tamaño",
+        title=f"Dinámica de composición por tamaño ({metrica}) — "
+              f"proyección {anio_proy}",
+        hovermode="x unified", legend_title_text="Tamaño",
     )
     return fig

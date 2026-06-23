@@ -1,7 +1,7 @@
-"""Programación lineal: asignación óptima de recursos por tamaño de empresa.
+"""Programación lineal: asignación óptima del apoyo institucional por sector.
 
-Maximiza el ingreso potencial repartiendo una proporción de recursos entre
-Micro, Pequeña, Mediana y Grande, sujeto a restricciones de equidad.
+Maximiza el aporte potencial al PIB del segmento Mipyme repartiendo un
+presupuesto de recursos entre los cinco sectores económicos con mayor aporte.
 """
 
 from __future__ import annotations
@@ -11,56 +11,41 @@ import plotly.graph_objects as go
 import pulp
 from plotly.subplots import make_subplots
 
-from estadisticas.analisis._utiles import TAMANIOS, buscar_columna
-from estadisticas.data import columna_categoria
+# Aporte de las micro empresas al PIB por sector (%, BCCR, año 2022).
+# Coeficientes de la función objetivo (insumo externo a la hoja C1).
+SECTORES = {
+    "Enseñanza y salud": 5.55,
+    "Act. inmobiliarias": 2.90,
+    "Prof. y técnicas": 2.77,
+    "Comercio": 1.35,
+    "Construcción": 0.88,
+}
 
-# Restricciones del modelo (proporción de recursos por tamaño).
-MIN_CADA = 0.05    # piso para todos los tamaños
-MIN_MICRO = 0.20   # restricción social: prioriza microempresas
-MAX_GRANDE = 0.50  # techo para empresas grandes
-
-
-def _ingreso_por_uj(df: pd.DataFrame) -> dict[str, float]:
-    """Ingreso promedio por unidad jurídica de cada tamaño en el último año."""
-    cat = columna_categoria(df)
-    col_ing = buscar_columna(df, "Ingresos")
-    col_uj = buscar_columna(df, "Cantidad UJ", "Unidades jurídicas")
-
-    anio = int(df["Año"].dropna().max())
-    datos = df[(df["Año"] == anio) & (df[cat].astype(str).isin(TAMANIOS))]
-    datos = datos.set_index(datos[cat].astype(str))
-
-    ingresos = {}
-    for tam in TAMANIOS:
-        if tam in datos.index:
-            uj = datos.loc[tam, col_uj]
-            ing = datos.loc[tam, col_ing]
-            ingresos[tam] = float(ing / uj) if uj and uj > 0 else 0.0
-        else:
-            ingresos[tam] = 0.0
-    return ingresos
+PRESUPUESTO = 100   # unidades de recurso de apoyo a repartir
+MAX_SECTOR = 40     # tope por sector para no concentrar los recursos
+UNIFORME = PRESUPUESTO / len(SECTORES)  # asignación equitativa de referencia
 
 
-def optimizar_asignacion(df: pd.DataFrame) -> go.Figure:
-    """Resuelve el modelo de asignación y devuelve figura con barras y tabla."""
-    ingreso = _ingreso_por_uj(df)
+def optimizar_asignacion(df: pd.DataFrame | None = None) -> go.Figure:
+    """Resuelve el modelo de asignación y devuelve figura con barras y tabla.
 
-    modelo = pulp.LpProblem("asignacion_recursos", pulp.LpMaximize)
-    x = {tam: pulp.LpVariable(f"x_{tam}", lowBound=0) for tam in TAMANIOS}
+    `df` no se utiliza: los coeficientes de aporte sectorial al PIB provienen
+    del conjunto de datos del BCCR 2018-2022, externo al cuadro C1.
+    """
+    modelo = pulp.LpProblem("apoyo_mipyme", pulp.LpMaximize)
+    x = {s: pulp.LpVariable(f"x_{i}", lowBound=0, upBound=MAX_SECTOR)
+         for i, s in enumerate(SECTORES)}
 
-    modelo += pulp.lpSum(x[tam] * ingreso[tam] for tam in TAMANIOS)
-
-    modelo += pulp.lpSum(x.values()) == 1
-    for tam in TAMANIOS:
-        modelo += x[tam] >= MIN_CADA
-    modelo += x["Micro"] >= MIN_MICRO
-    modelo += x["Grande"] <= MAX_GRANDE
+    modelo += pulp.lpSum(SECTORES[s] * x[s] for s in SECTORES)
+    modelo += pulp.lpSum(x.values()) <= PRESUPUESTO
 
     modelo.solve(pulp.PULP_CBC_CMD(msg=False))
 
-    asignacion = {tam: x[tam].value() for tam in TAMANIOS}
-    aporte = {tam: asignacion[tam] * ingreso[tam] for tam in TAMANIOS}
-    total = pulp.value(modelo.objective)
+    asignacion = {s: x[s].value() for s in SECTORES}
+    aporte = {s: asignacion[s] * SECTORES[s] for s in SECTORES}
+    z_optimo = pulp.value(modelo.objective)
+    z_uniforme = sum(SECTORES[s] * UNIFORME for s in SECTORES)
+    mejora = (z_optimo - z_uniforme) / z_uniforme * 100
 
     fig = make_subplots(
         rows=1, cols=2, column_widths=[0.55, 0.45],
@@ -69,33 +54,34 @@ def optimizar_asignacion(df: pd.DataFrame) -> go.Figure:
     )
 
     fig.add_trace(
-        go.Bar(x=TAMANIOS, y=[asignacion[t] for t in TAMANIOS],
-               text=[f"{asignacion[t]:.0%}" for t in TAMANIOS],
+        go.Bar(x=list(SECTORES), y=[asignacion[s] for s in SECTORES],
+               text=[f"{asignacion[s]:.0f}" for s in SECTORES],
                textposition="outside", marker_color="#2980b9",
-               name="Proporción"),
+               name="Unidades"),
         row=1, col=1,
     )
 
     fig.add_trace(
         go.Table(
             header=dict(
-                values=["Tamaño", "Ingreso/UJ (₡)", "Asignación", "Aporte (₡)"],
+                values=["Sector", "Aporte PIB (%)", "Asignación", "Aporte"],
                 fill_color="#2c3e50", font=dict(color="white"), align="left"),
             cells=dict(
                 values=[
-                    TAMANIOS,
-                    [f"{ingreso[t]:,.0f}" for t in TAMANIOS],
-                    [f"{asignacion[t]:.0%}" for t in TAMANIOS],
-                    [f"{aporte[t]:,.0f}" for t in TAMANIOS],
+                    list(SECTORES),
+                    [f"{SECTORES[s]:.2f}" for s in SECTORES],
+                    [f"{asignacion[s]:.0f}" for s in SECTORES],
+                    [f"{aporte[s]:.1f}" for s in SECTORES],
                 ],
                 align="left"),
         ),
         row=1, col=2,
     )
 
-    fig.update_yaxes(tickformat=".0%", title_text="Proporción", row=1, col=1)
+    fig.update_yaxes(title_text="Unidades de recurso", row=1, col=1)
     fig.update_layout(
-        title=f"Ingreso potencial total maximizado: ₡{total:,.0f} por UJ",
+        title=f"Aporte potencial al PIB maximizado: Z = {z_optimo:.1f}  "
+              f"(+{mejora:.1f}% sobre la distribución uniforme: {z_uniforme:.0f})",
         showlegend=False,
     )
     return fig

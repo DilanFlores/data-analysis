@@ -1,7 +1,7 @@
 """Control estadístico de procesos: gráfico I-MR para observaciones anuales.
 
-Gráfico de individuales (I) y de rango móvil (MR) con límites a ±3 sigma,
-marcando los puntos fuera de control.
+Gráfico de individuales (I) con línea central y límites a ±3σ, acompañado del
+gráfico de rango móvil (MR). Marca los puntos fuera de control.
 """
 
 from __future__ import annotations
@@ -13,10 +13,7 @@ from plotly.subplots import make_subplots
 
 from estadisticas.analisis._utiles import serie_total
 
-# Constantes de las cartas I-MR para n=2 (rango móvil de dos observaciones).
-D2 = 1.128
-E2 = 2.66    # 3 / d2, factor de los límites del gráfico de individuales
-D4 = 3.267   # factor del límite superior del rango móvil
+D4 = 3.267  # factor del límite superior del rango móvil (n=2)
 
 
 def _puntos_fuera(valores: np.ndarray, lci: float, lcs: float) -> list[int]:
@@ -27,18 +24,21 @@ def _puntos_fuera(valores: np.ndarray, lci: float, lcs: float) -> list[int]:
 def grafico_imr(df: pd.DataFrame, metrica: str) -> go.Figure:
     """Carta I-MR de la serie total de `metrica`.
 
-    Devuelve una figura con dos paneles: individuales (arriba) y rango móvil.
+    Los límites del gráfico de individuales se calculan como media ± 3σ
+    (desviación estándar muestral). Devuelve una figura con dos paneles:
+    individuales (arriba) y rango móvil (abajo).
     """
     serie = serie_total(df, metrica)
     anios = serie.index.tolist()
     valores = serie.to_numpy(dtype=float)
 
+    media = float(valores.mean())
+    sigma = float(valores.std(ddof=1))
+    lcs_i = media + 3 * sigma
+    lci_i = max(0.0, media - 3 * sigma)
+
     rango_movil = np.abs(np.diff(valores))
     mr_medio = float(rango_movil.mean())
-    media = float(valores.mean())
-
-    lcs_i = media + E2 * mr_medio
-    lci_i = media - E2 * mr_medio
     lcs_mr = D4 * mr_medio
     lci_mr = 0.0
 
@@ -84,8 +84,11 @@ def grafico_imr(df: pd.DataFrame, metrica: str) -> go.Figure:
         )
     _lineas_control(fig, mr_medio, lcs_mr, lci_mr, row=2)
 
-    fig.update_layout(title=f"Control estadístico de {metrica}",
-                      hovermode="x unified", showlegend=False)
+    fig.update_layout(
+        title=f"Control estadístico de {metrica} — "
+              f"media {media:,.0f} · LCS {lcs_i:,.0f} · LCI {lci_i:,.0f}",
+        hovermode="x unified", showlegend=False,
+    )
     return fig
 
 

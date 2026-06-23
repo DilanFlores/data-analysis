@@ -91,15 +91,16 @@ def _mostrar_metodos(df):
     )
 
     with tab_pron:
-        st.markdown("Modelos PM3, suavización exponencial y Holt; se elige el "
-                    "de menor MAPE y se proyectan 2025–2027.")
-        for variable in (VAR_UJ, VAR_TRABAJADORES):
-            st.plotly_chart(analisis.pronosticar(df, variable),
-                            use_container_width=True)
+        st.markdown("Modelos PM3, suavización exponencial y Holt sobre la "
+                    "cantidad de unidades jurídicas; se elige el de menor MAPE "
+                    "(Holt) y se proyecta 2025–2027.")
+        st.plotly_chart(analisis.pronosticar(df, VAR_UJ),
+                        use_container_width=True)
 
     with tab_pl:
-        st.markdown("Asignación óptima de recursos por tamaño para maximizar el "
-                    "ingreso potencial total (PuLP).")
+        st.markdown("Asignación óptima de un presupuesto de apoyo entre los "
+                    "sectores de mayor aporte al PIB para maximizar el aporte "
+                    "potencial del segmento Mipyme (PuLP).")
         st.plotly_chart(analisis.optimizar_asignacion(df),
                         use_container_width=True)
 
@@ -111,8 +112,9 @@ def _mostrar_metodos(df):
                             use_container_width=True)
 
     with tab_mk:
-        st.markdown("Matriz de transición entre tamaños y proyección de la "
-                    "composición empresarial a 5, 10 y 20 años.")
+        st.markdown("Evolución de la composición empresarial por tamaño y "
+                    "proyección del año siguiente mediante el cambio promedio "
+                    "anual de las proporciones.")
         st.plotly_chart(analisis.proyectar_markov(df, VAR_UJ),
                         use_container_width=True)
 
